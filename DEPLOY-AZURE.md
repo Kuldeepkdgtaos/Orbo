@@ -141,12 +141,23 @@ az containerapp env create -n $ENVN -g $RG -l $LOCATION
 ## 6. Build the 3 images into ACR (no local Docker needed)
 
 The pipeline's deploy step runs `az containerapp update`, which needs the apps to already exist —
-and apps need an image. Build once in the cloud (the orchestrator image also builds the SPA):
+and apps need an image. Build once in the cloud (the orchestrator image also builds the SPA).
+
+`az acr build … .` uploads the **current directory** as the build context, so you must run it
+**from inside a clone of the repo** (otherwise you get `Unable to find 'Dockerfile.orchestrator'`).
+The repo is private — clone with a GitHub **Personal Access Token**:
+```bash
+git clone https://github.com/Kuldeepkdgtaos/Orbo.git   # prompts for username + PAT
+cd Orbo
+```
+Then build (still in the same shell, so `$ACR` from §0 is set):
 ```bash
 az acr build -r $ACR -t orbo-orchestrator:prod-latest -f Dockerfile.orchestrator .
 az acr build -r $ACR -t orbo-agent:prod-latest        -f Dockerfile.agent .
 az acr build -r $ACR -t orbo-mcp:prod-latest          -f Dockerfile.mcp .
 ```
+> Alternative (no clone): pass the git URL as the context —
+> `az acr build -r $ACR -t orbo-orchestrator:prod-latest -f Dockerfile.orchestrator https://<PAT>@github.com/Kuldeepkdgtaos/Orbo.git`
 
 ---
 
