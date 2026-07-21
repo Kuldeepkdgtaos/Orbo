@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+# mcp==1.26.0 pulls in starlette/uvicorn/sse-starlette/httpx/pydantic-settings
+# transitively — no need to pin those separately here.
+RUN pip install --no-cache-dir \
+    "mcp==1.26.0" \
+    "sqlalchemy[asyncio]>=2.0" \
+    "asyncpg>=0.29" \
+    "openpyxl>=3.1" \
+    "msal>=1.28" \
+    "python-json-logger>=2.0"
+
+COPY shared ./shared
+COPY mcp_server ./mcp_server
+
+EXPOSE 8010
+CMD ["python", "mcp_server/standup_tools_server.py"]

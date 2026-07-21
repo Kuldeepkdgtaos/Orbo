@@ -1,0 +1,113 @@
+# Postgres is NOT run here — this stack expects an external Postgres instance
+# (e.g. your local Postgres on port 5433, matching DATABASE_URL in .env).
+# Set up the schema first: psql -U postgres -p 5433 -d standup -f db-setup.sql
+
+services:
+  standup-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    ports:
+      - "8010:8010"
+    env_file: .env
+    environment:
+      MCP_HOST: standup-mcp
+      MCP_PORT: "8010"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8010),3); s.close()"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  standup-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    ports:
+      - "8020:8020"
+    env_file: .env
+    environment:
+      AGENT_ROLE: standup
+      MCP_HOST: standup-mcp
+      MCP_PORT: "8010"
+      STANDUP_AGENT_HOST: standup-agent
+      STANDUP_AGENT_PORT: "8020"
+    depends_on:
+      standup-mcp:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  # Project Manager Agent — same image as standup-agent, role selected via
+  # AGENT_ROLE, bound to 8021 (the default CMD binds 8020, so override it here).
+  project-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command: ["uvicorn", "agent.server:app", "--host", "0.0.0.0", "--port", "8021"]
+    ports:
+      - "8021:8021"
+    env_file: .env
+    environment:
+      AGENT_ROLE: project
+      MCP_HOST: standup-mcp
+      MCP_PORT: "8010"
+      PROJECT_AGENT_HOST: project-agent
+      PROJECT_AGENT_PORT: "8021"
+    depends_on:
+      standup-mcp:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8021/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      STANDUP_AGENT_HOST: standup-agent
+      STANDUP_AGENT_PORT: "8020"
+      PROJECT_AGENT_HOST: project-agent
+      PROJECT_AGENT_PORT: "8021"
+    depends_on:
+      standup-agent:
+        condition: service_healthy
+      project-agent:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    environment:
+      # nginx proxies /api and /webhooks here. Local dev = the compose
+      # orchestrator; in prod the pipeline sets this to the orchestrator's
+      # internal Container Apps FQDN.
+      ORCHESTRATOR_URL: http://orchestrator:8000
+    depends_on:
+      - orchestrator
+    restart: unless-stopped
