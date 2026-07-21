@@ -150,7 +150,8 @@ images (the orchestrator image also builds the SPA) and push them to ACR.
 > are enabled.
 
 ### Option A — build locally with Docker, push to ACR (works regardless of ACR Tasks)
-On a machine with Docker (your laptop), from the repo root:
+On a machine with a running Docker daemon (your laptop with Docker Desktop) — **not Azure Cloud
+Shell, which has no Docker daemon** — from the repo root:
 ```bash
 az acr login -n $ACR
 docker build -t $ACR.azurecr.io/orbo-orchestrator:prod-latest -f Dockerfile.orchestrator .
