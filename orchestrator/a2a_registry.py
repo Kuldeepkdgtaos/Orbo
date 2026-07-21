@@ -77,15 +77,13 @@ class A2AAgentRegistry:
         self._setup_from_settings()
 
     def _setup_from_settings(self):
-        if settings.standup_agent_enabled:
-            url = f"{settings.a2a_scheme}://{settings.standup_agent_host}:{settings.standup_agent_port}"
-            self._agents["standup_agent"] = {"client": A2AClient(url)}
-            logger.info(f"Standup Manager Agent registered: {url}")
-
-        if settings.project_agent_enabled:
-            url = f"{settings.a2a_scheme}://{settings.project_agent_host}:{settings.project_agent_port}"
-            self._agents["project_agent"] = {"client": A2AClient(url)}
-            logger.info(f"Project Manager Agent registered: {url}")
+        # One agent serves both domains (AGENT_ROLE=all). It is registered under
+        # the key "agent"; the orchestrator selects the skill by the meeting's
+        # domain, not by which agent it talks to.
+        if settings.agent_enabled:
+            url = f"{settings.a2a_scheme}://{settings.agent_host}:{settings.agent_port}"
+            self._agents["agent"] = {"client": A2AClient(url)}
+            logger.info(f"Manager Agent registered: {url}")
 
         if not self._agents:
             logger.info("No A2A agents enabled")

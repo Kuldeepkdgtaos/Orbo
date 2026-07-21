@@ -1,11 +1,14 @@
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -383,3 +386,31 @@ async def standup_stream(standup_id: str, request: Request, db: AsyncSession = D
                 last_id = transition.id
 
     return EventSourceResponse(event_generator())
+
+
+# ─── Static SPA ───────────────────────────────────────────────────
+# The React frontend is built into this image (see Dockerfile.orchestrator) and
+# served here, so the orchestrator is the single public app (UI + API + webhooks
+# same-origin). Registered LAST so it never shadows the /api, /webhooks, /health
+# or /stream routes above. Auth is not enforced on these paths (see auth.py —
+# only /api/* is gated), so the SPA loads for anonymous users (login page).
+_STATIC_DIR = os.path.abspath(os.environ.get("STATIC_DIR", "/app/static"))
+
+if os.path.isdir(_STATIC_DIR):
+    _assets_dir = os.path.join(_STATIC_DIR, "assets")
+    if os.path.isdir(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def spa(full_path: str):
+        # Never mask API/webhook 404s with the SPA shell.
+        if full_path.startswith(("api/", "webhooks/")):
+            raise HTTPException(status_code=404, detail="Not found")
+        # Serve a real static file if it resolves safely inside the bundle
+        # (guards against path traversal); otherwise the SPA entry point.
+        candidate = os.path.abspath(os.path.join(_STATIC_DIR, full_path))
+        if full_path and candidate.startswith(_STATIC_DIR + os.sep) and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
+else:
+    logger.warning("STATIC_DIR %s not found — SPA not served (API-only mode)", _STATIC_DIR)

@@ -1,7 +1,17 @@
+# ── Stage 1: build the React SPA ──────────────────────────────────────────────
+FROM node:20-alpine AS frontend
+WORKDIR /fe
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+COPY frontend/ ./
+RUN npm run build          # outputs /fe/dist
+
+# ── Stage 2: orchestrator (FastAPI) — serves the API + the built SPA ──────────
 FROM python:3.11-slim
 
 WORKDIR /app
 ENV PYTHONPATH=/app
+ENV STATIC_DIR=/app/static
 
 RUN pip install --no-cache-dir \
     "fastapi>=0.110" \
@@ -26,6 +36,8 @@ RUN pip install --no-cache-dir \
 COPY shared ./shared
 COPY a2a ./a2a
 COPY orchestrator ./orchestrator
+# The built SPA — served by orchestrator/main.py at STATIC_DIR.
+COPY --from=frontend /fe/dist ./static
 
 EXPOSE 8000
 CMD ["uvicorn", "orchestrator.main:app", "--host", "0.0.0.0", "--port", "8000"]

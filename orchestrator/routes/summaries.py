@@ -110,9 +110,10 @@ async def download_excel(standup_id: str, db: AsyncSession = Depends(get_db)):
 # ─── Actions (via A2A) ────────────────────────────────────────────
 
 # Which agent + skills handle each meeting domain. Mirrors react_agent._DOMAIN_ROUTING.
+# Both domains are served by the single "agent" (role=all); only skills differ.
 _DOMAIN_ROUTING = {
-    "standup": {"agent": "standup_agent", "summarize": "summarize_standup", "deliver": "deliver_report"},
-    "project": {"agent": "project_agent", "summarize": "summarize_project", "deliver": "deliver_project_report"},
+    "standup": {"agent": "agent", "summarize": "summarize_standup", "deliver": "deliver_report"},
+    "project": {"agent": "agent", "summarize": "summarize_project", "deliver": "deliver_project_report"},
 }
 
 

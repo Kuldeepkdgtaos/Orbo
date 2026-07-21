@@ -26,15 +26,16 @@ from .llm_service import get_orchestrator_model
 
 logger = logging.getLogger(__name__)
 
-# Per-domain routing: which agent + which skills process the meeting.
+# Per-domain routing: both domains are served by the single "agent" (role=all);
+# only the skill names differ by domain.
 _DOMAIN_ROUTING = {
     "standup": {
-        "agent": "standup_agent",
+        "agent": "agent",
         "summarize": "summarize_standup",
         "deliver": "deliver_report",
     },
     "project": {
-        "agent": "project_agent",
+        "agent": "agent",
         "summarize": "summarize_project",
         "deliver": "deliver_project_report",
     },

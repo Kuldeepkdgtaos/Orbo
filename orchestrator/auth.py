@@ -28,10 +28,12 @@ logger = logging.getLogger(__name__)
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Paths that never require a logged-in user.
-_EXEMPT_PREFIXES = ("/webhooks/",)
-_EXEMPT_EXACT = {"/health", "/", "/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}
-_EXEMPT_AUTH = {"/api/auth/login", "/api/auth/register"}
+# The orchestrator also serves the static SPA, so auth gates ONLY the JSON API
+# (`/api/*`). Everything else — the SPA bundle + client routes, `/health`,
+# `/webhooks/*` (Recall can't send a token), OpenAPI docs — is public. Within
+# `/api/*`, the login/register endpoints and the SSE stream (EventSource can't
+# send headers) are also open.
+_EXEMPT_API = {"/api/auth/login", "/api/auth/register"}
 
 
 def hash_password(password: str) -> str:
@@ -70,11 +72,13 @@ def _bearer_token(request: Request) -> str | None:
 
 
 def _is_exempt(path: str) -> bool:
-    if path in _EXEMPT_EXACT or path in _EXEMPT_AUTH:
+    if not path.startswith("/api/"):   # SPA static, /, /health, /webhooks/*
         return True
-    if path.endswith("/stream"):  # browser EventSource can't send headers
+    if path in _EXEMPT_API:            # /api/auth/login|register
         return True
-    return any(path.startswith(p) for p in _EXEMPT_PREFIXES)
+    if path.endswith("/stream"):       # EventSource can't send headers
+        return True
+    return False
 
 
 async def _resolve_user(token: str, db: AsyncSession) -> User:

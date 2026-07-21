@@ -162,12 +162,32 @@ _PROJECT_SKILLS = [
 ]
 
 
+def _dedup_skills(*skill_lists) -> list[AgentSkill]:
+    """Merge skill lists, keeping the first occurrence of each id (both roles
+    share ``summarize_period``, so it must not appear twice on the 'all' card)."""
+    seen: dict[str, AgentSkill] = {}
+    for lst in skill_lists:
+        for s in lst:
+            seen.setdefault(s.id, s)
+    return list(seen.values())
+
+
+# 'all' = one agent serving both domains' skills (5 unique ids).
+_ALL_SKILLS = _dedup_skills(_STANDUP_SKILLS, _PROJECT_SKILLS)
+
 _ROLE_SKILLS = {
+    "all": _ALL_SKILLS,
     "standup": _STANDUP_SKILLS,
     "project": _PROJECT_SKILLS,
 }
 
 _ROLE_META = {
+    "all": (
+        "orbo-manager-agent",
+        ("Unified manager agent serving both domains: standup (per-person + team "
+         "rollup) and project (project-status lens) summaries + delivery, plus "
+         "historic/aggregated period summaries. All skills use GPT-4o + MCP tools."),
+    ),
     "standup": (
         "standup-manager-agent",
         ("Handles post-meeting standup processing: summarizes each participant's "
@@ -186,8 +206,8 @@ _ROLE_META = {
 
 
 def build_agent_card(role: str) -> AgentCard:
-    """Build the AgentCard for a role ('standup' | 'project'). The interface URL
-    is left blank here and populated at runtime by agent/server.py."""
+    """Build the AgentCard for a role ('all' | 'standup' | 'project'). The
+    interface URL is left blank here and populated at runtime by agent/server.py."""
     if role not in _ROLE_SKILLS:
         raise ValueError(f"Unknown agent role: {role!r}")
     name, description = _ROLE_META[role]

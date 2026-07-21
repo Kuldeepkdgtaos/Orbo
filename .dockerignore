@@ -1,0 +1,14 @@
+# Keep build contexts small and avoid shipping host-built artifacts into images
+# (the orchestrator image builds the SPA itself, so host node_modules must not
+# be copied in — it would clobber the fresh, correct-platform install).
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+.git
+.github
+.venv
+venv
+.env
+*.md
+frontend/.vite

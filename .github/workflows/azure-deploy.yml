@@ -1,33 +1,29 @@
 name: Build and Deploy to Azure Container Apps
 
 # ── Design ────────────────────────────────────────────────────────────────────
-# Modeled on the AskNIKI pipeline:
-#   • PARALLEL BUILDS — Orbo's 4 images build concurrently.
-#   • ACR LAYER CACHE — buildcache per image; only changed layers rebuild.
-#   • PATH FILTERS — docs/markdown-only changes skip the workflow.
-#   • PRs build-only (validate); push to `main` builds AND deploys to production.
+# Parallel builds, ACR layer cache, path filters. PRs build-only (validate);
+# push to `main` builds AND deploys to production.
 #
-# Orbo = 4 images, 5 Container Apps:
-#   orbo-orchestrator -> orchestrator            (internal ingress, :8000)
-#   orbo-agent        -> standup-agent (role=standup, :8020)  } same image,
-#                        project-agent (role=project, :8020)  } role via env
-#   orbo-mcp          -> standup-mcp             (internal ingress, :8010)
-#   orbo-frontend     -> frontend                (EXTERNAL ingress, :80) — the
-#                        only public app; proxies /api + /webhooks to orchestrator.
+# Orbo = 3 images, 3 Container Apps:
+#   orbo-orchestrator -> orchestrator  (EXTERNAL ingress, :8000) — serves the SPA
+#                        + /api + /webhooks; this FQDN is the Recall webhook base.
+#   orbo-agent        -> agent         (internal, :8020, AGENT_ROLE=all) — one
+#                        agent serving BOTH standup + project skills.
+#   orbo-mcp          -> mcp           (internal, :8010) — tools.
 #
 # ── Required GitHub config (single `production` Environment) ──────────────────
-# Repo-level Variables:  ACR_NAME  (your ACR name, without .azurecr.io)
-# Repo-level Secrets:    ACR_USERNAME, ACR_PASSWORD
+# Repo Variables:  ACR_NAME
+# Repo Secrets:    ACR_USERNAME, ACR_PASSWORD
 # Environment (production) Secrets:
 #   AZURE_CREDENTIALS, DATABASE_URL, JWT_SECRET, RECALL_API_KEY,
 #   RECALL_WEBHOOK_SECRET, AZURE_OPENAI_API_KEY,
 #   MS_GRAPH_TENANT_ID, MS_GRAPH_CLIENT_ID, MS_GRAPH_CLIENT_SECRET
 # Environment (production) Variables:
-#   RESOURCE_GROUP, ORCHESTRATOR_APP, STANDUP_AGENT_APP, PROJECT_AGENT_APP,
-#   MCP_APP, FRONTEND_APP, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT,
-#   AZURE_OPENAI_API_VERSION, RECALL_REGION, MS_GRAPH_SENDER_EMAIL,
-#   LLM_PROVIDER, ORCHESTRATOR_MODEL, SLM_PROVIDER, SUMMARIZE_MODEL,
-#   DELIVER_MODEL, JWT_ALGORITHM, JWT_EXPIRY_MINUTES, LOG_LEVEL
+#   RESOURCE_GROUP, ORCHESTRATOR_APP, AGENT_APP, MCP_APP,
+#   AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, AZURE_OPENAI_API_VERSION,
+#   RECALL_REGION, MS_GRAPH_SENDER_EMAIL, LLM_PROVIDER, ORCHESTRATOR_MODEL,
+#   SLM_PROVIDER, SUMMARIZE_MODEL, DELIVER_MODEL, JWT_ALGORITHM,
+#   JWT_EXPIRY_MINUTES, LOG_LEVEL
 # See DEPLOY-AZURE.md for one-time infra creation.
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -62,7 +58,7 @@ jobs:
   build-orchestrator:
     needs: setup
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -74,7 +70,7 @@ jobs:
       - uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile.orchestrator
+          file: Dockerfile.orchestrator     # multi-stage: builds the SPA too
           push: ${{ needs.setup.outputs.push_image }}
           tags: |
             ${{ env.ACR_URL }}/orbo-orchestrator:${{ env.ENV_LABEL }}-${{ github.sha }}
@@ -128,32 +124,9 @@ jobs:
           cache-from: type=registry,ref=${{ env.ACR_URL }}/orbo-mcp:buildcache
           cache-to:   type=registry,ref=${{ env.ACR_URL }}/orbo-mcp:buildcache,mode=max
 
-  build-frontend:
-    needs: setup
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.ACR_URL }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
-      - uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: ${{ needs.setup.outputs.push_image }}
-          tags: |
-            ${{ env.ACR_URL }}/orbo-frontend:${{ env.ENV_LABEL }}-${{ github.sha }}
-            ${{ env.ACR_URL }}/orbo-frontend:${{ env.ENV_LABEL }}-latest
-          cache-from: type=registry,ref=${{ env.ACR_URL }}/orbo-frontend:buildcache
-          cache-to:   type=registry,ref=${{ env.ACR_URL }}/orbo-frontend:buildcache,mode=max
-
   # ── Deploy (skipped on PRs) ───────────────────────────────────────────────────
   deploy:
-    needs: [setup, build-orchestrator, build-agent, build-mcp, build-frontend]
+    needs: [setup, build-orchestrator, build-agent, build-mcp]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -172,14 +145,11 @@ jobs:
           [[ -z "${{ secrets.AZURE_OPENAI_API_KEY }}"  ]] && missing+=("secret:AZURE_OPENAI_API_KEY")
           [[ -z "${{ vars.RESOURCE_GROUP }}"           ]] && missing+=("var:RESOURCE_GROUP")
           [[ -z "${{ vars.ORCHESTRATOR_APP }}"         ]] && missing+=("var:ORCHESTRATOR_APP")
-          [[ -z "${{ vars.STANDUP_AGENT_APP }}"        ]] && missing+=("var:STANDUP_AGENT_APP")
-          [[ -z "${{ vars.PROJECT_AGENT_APP }}"        ]] && missing+=("var:PROJECT_AGENT_APP")
+          [[ -z "${{ vars.AGENT_APP }}"                ]] && missing+=("var:AGENT_APP")
           [[ -z "${{ vars.MCP_APP }}"                  ]] && missing+=("var:MCP_APP")
-          [[ -z "${{ vars.FRONTEND_APP }}"             ]] && missing+=("var:FRONTEND_APP")
           [[ -z "${{ vars.ACR_NAME }}"                 ]] && missing+=("var:ACR_NAME")
           if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "❌ Missing in the 'production' GitHub Environment: ${missing[*]}"
-            exit 1
+            echo "❌ Missing in the 'production' GitHub Environment: ${missing[*]}"; exit 1
           fi
           echo "✅ Required secrets/variables present"
 
@@ -195,16 +165,12 @@ jobs:
           echo "orchestrator_img=${{ env.ACR_URL }}/orbo-orchestrator:${L}-${SHA}" >> $GITHUB_OUTPUT
           echo "agent_img=${{ env.ACR_URL }}/orbo-agent:${L}-${SHA}"               >> $GITHUB_OUTPUT
           echo "mcp_img=${{ env.ACR_URL }}/orbo-mcp:${L}-${SHA}"                    >> $GITHUB_OUTPUT
-          echo "frontend_img=${{ env.ACR_URL }}/orbo-frontend:${L}-${SHA}"         >> $GITHUB_OUTPUT
-
           fqdn() { az containerapp show -n "$1" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv; }
           echo "orchestrator_fqdn=$(fqdn ${{ vars.ORCHESTRATOR_APP }})" >> $GITHUB_OUTPUT
-          echo "standup_agent_fqdn=$(fqdn ${{ vars.STANDUP_AGENT_APP }})" >> $GITHUB_OUTPUT
-          echo "project_agent_fqdn=$(fqdn ${{ vars.PROJECT_AGENT_APP }})" >> $GITHUB_OUTPUT
+          echo "agent_fqdn=$(fqdn ${{ vars.AGENT_APP }})" >> $GITHUB_OUTPUT
           echo "mcp_fqdn=$(fqdn ${{ vars.MCP_APP }})" >> $GITHUB_OUTPUT
-          echo "frontend_fqdn=$(fqdn ${{ vars.FRONTEND_APP }})" >> $GITHUB_OUTPUT
 
-      - name: Deploy standup-mcp
+      - name: Deploy mcp
         run: |
           az containerapp update -n "${{ vars.MCP_APP }}" -g "${{ vars.RESOURCE_GROUP }}" \
             --image "${{ steps.ctx.outputs.mcp_img }}" \
@@ -218,32 +184,16 @@ jobs:
               "MS_GRAPH_SENDER_EMAIL=${{ vars.MS_GRAPH_SENDER_EMAIL }}" \
               "LOG_LEVEL=${{ vars.LOG_LEVEL }}"
 
-      - name: Deploy standup-agent
+      - name: Deploy agent
         run: |
-          az containerapp update -n "${{ vars.STANDUP_AGENT_APP }}" -g "${{ vars.RESOURCE_GROUP }}" \
+          az containerapp update -n "${{ vars.AGENT_APP }}" -g "${{ vars.RESOURCE_GROUP }}" \
             --image "${{ steps.ctx.outputs.agent_img }}" \
             --min-replicas 0 --max-replicas 2 \
             --set-env-vars \
-              "AGENT_ROLE=standup" \
-              "AZURE_OPENAI_ENDPOINT=${{ vars.AZURE_OPENAI_ENDPOINT }}" \
-              "AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}" \
-              "AZURE_OPENAI_DEPLOYMENT=${{ vars.AZURE_OPENAI_DEPLOYMENT }}" \
-              "AZURE_OPENAI_API_VERSION=${{ vars.AZURE_OPENAI_API_VERSION }}" \
-              "SLM_PROVIDER=${{ vars.SLM_PROVIDER }}" \
-              "SUMMARIZE_MODEL=${{ vars.SUMMARIZE_MODEL }}" \
-              "DELIVER_MODEL=${{ vars.DELIVER_MODEL }}" \
-              "MCP_SCHEME=https" \
-              "MCP_HOST=${{ steps.ctx.outputs.mcp_fqdn }}" \
-              "MCP_PORT=443" \
-              "LOG_LEVEL=${{ vars.LOG_LEVEL }}"
-
-      - name: Deploy project-agent
-        run: |
-          az containerapp update -n "${{ vars.PROJECT_AGENT_APP }}" -g "${{ vars.RESOURCE_GROUP }}" \
-            --image "${{ steps.ctx.outputs.agent_img }}" \
-            --min-replicas 0 --max-replicas 2 \
-            --set-env-vars \
-              "AGENT_ROLE=project" \
+              "AGENT_ROLE=all" \
+              "AGENT_HOST=${{ steps.ctx.outputs.agent_fqdn }}" \
+              "AGENT_PORT=443" \
+              "A2A_SCHEME=https" \
               "AZURE_OPENAI_ENDPOINT=${{ vars.AZURE_OPENAI_ENDPOINT }}" \
               "AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}" \
               "AZURE_OPENAI_DEPLOYMENT=${{ vars.AZURE_OPENAI_DEPLOYMENT }}" \
@@ -269,7 +219,7 @@ jobs:
               "RECALL_API_KEY=${{ secrets.RECALL_API_KEY }}" \
               "RECALL_WEBHOOK_SECRET=${{ secrets.RECALL_WEBHOOK_SECRET }}" \
               "RECALL_REGION=${{ vars.RECALL_REGION }}" \
-              "RECALL_WEBHOOK_BASE_URL=https://${{ steps.ctx.outputs.frontend_fqdn }}" \
+              "RECALL_WEBHOOK_BASE_URL=https://${{ steps.ctx.outputs.orchestrator_fqdn }}" \
               "AZURE_OPENAI_ENDPOINT=${{ vars.AZURE_OPENAI_ENDPOINT }}" \
               "AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}" \
               "AZURE_OPENAI_DEPLOYMENT=${{ vars.AZURE_OPENAI_DEPLOYMENT }}" \
@@ -277,37 +227,26 @@ jobs:
               "LLM_PROVIDER=${{ vars.LLM_PROVIDER }}" \
               "ORCHESTRATOR_MODEL=${{ vars.ORCHESTRATOR_MODEL }}" \
               "A2A_SCHEME=https" \
-              "STANDUP_AGENT_ENABLED=true" \
-              "STANDUP_AGENT_HOST=${{ steps.ctx.outputs.standup_agent_fqdn }}" \
-              "STANDUP_AGENT_PORT=443" \
-              "PROJECT_AGENT_ENABLED=true" \
-              "PROJECT_AGENT_HOST=${{ steps.ctx.outputs.project_agent_fqdn }}" \
-              "PROJECT_AGENT_PORT=443" \
+              "AGENT_ENABLED=true" \
+              "AGENT_HOST=${{ steps.ctx.outputs.agent_fqdn }}" \
+              "AGENT_PORT=443" \
               "MCP_SCHEME=https" \
               "MCP_HOST=${{ steps.ctx.outputs.mcp_fqdn }}" \
               "MCP_PORT=443" \
               "LOG_LEVEL=${{ vars.LOG_LEVEL }}"
 
-      - name: Deploy frontend
-        run: |
-          az containerapp update -n "${{ vars.FRONTEND_APP }}" -g "${{ vars.RESOURCE_GROUP }}" \
-            --image "${{ steps.ctx.outputs.frontend_img }}" \
-            --min-replicas 1 --max-replicas 2 \
-            --set-env-vars \
-              "ORCHESTRATOR_URL=https://${{ steps.ctx.outputs.orchestrator_fqdn }}"
-
-      - name: Get frontend URL
+      - name: Get app URL
         id: get-url
         run: |
-          echo "app_url=https://${{ steps.ctx.outputs.frontend_fqdn }}" >> $GITHUB_OUTPUT
-          echo "Deployed → https://${{ steps.ctx.outputs.frontend_fqdn }}"
+          echo "app_url=https://${{ steps.ctx.outputs.orchestrator_fqdn }}" >> $GITHUB_OUTPUT
+          echo "Deployed → https://${{ steps.ctx.outputs.orchestrator_fqdn }}"
 
       - name: Smoke test
         run: |
           URL="${{ steps.get-url.outputs.app_url }}"
           for i in 1 2 3 4 5; do
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL/")
-            [ "$CODE" = "200" ] && { echo "✅ frontend up (HTTP $CODE)"; exit 0; }
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL/health")
+            [ "$CODE" = "200" ] && { echo "✅ orchestrator up (HTTP $CODE)"; exit 0; }
             echo "attempt $i: HTTP $CODE — retrying in 15s"; sleep 15
           done
           echo "❌ smoke test failed"; exit 1

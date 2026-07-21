@@ -11,12 +11,14 @@ empty `tests/` scaffold were all removed after the new stack was verified workin
 schema management is now a single manual SQL script (`db-setup.sql`), not Alembic.
 
 ```
-Frontend (React SPA, :3000)  — left nav: Standup Management / Project Management,
-      │                          each with Meetings / Data Entry / Summaries
-      │  REST + SSE (/api/*, Authorization: Bearer JWT)
+Browser  — left nav: Standup Management / Project Management,
+      │      each with Meetings / Data Entry / Summaries
+      │  the React SPA is SERVED BY the orchestrator (same origin);
+      │  REST + SSE (/api/*, Authorization: Bearer JWT), webhooks (/webhooks/*)
       ▼
 ┌────────────────────────────────────────────────┐
-│ ORCHESTRATOR (:8000) — A2A CLIENT                │
+│ ORCHESTRATOR (:8000) — PUBLIC app, A2A CLIENT     │
+│  • serves the built SPA (static) + /api + /webhooks│
 │  • multi-user JWT auth, CORS, SSE live status     │
 │  • meeting + template CRUD (direct DB, domain-tagged) │
 │  • Data Entry: per-user dynamic Postgres tables   │
@@ -24,22 +26,21 @@ Frontend (React SPA, :3000)  — left nav: Standup Management / Project Manageme
 │  • Recall webhook ingress + meeting state machine │
 │  • transcript ingest + speaker attribution        │
 │  • Tier-1 ReAct agent (LangGraph); routes each     │
-│    meeting to its domain's agent by `domain`       │
-└───────┬──────────────────────────────┬──────────┘
-        │  A2A v0.3.0 (JSON-RPC, /a2a)  │
-        ▼                               ▼
-┌──────────────────────┐   ┌──────────────────────────┐
-│ STANDUP MANAGER AGENT │   │ PROJECT MANAGER AGENT      │
-│ (:8020, role=standup) │   │ (:8021, role=project)      │
-│ summarize_standup,    │   │ summarize_project,         │
-│ deliver_report,       │   │ deliver_project_report,    │
-│ summarize_period      │   │ summarize_period           │
-└──────────┬───────────┘   └───────────┬──────────────┘
-           │  both same image (AGENT_ROLE)│
-           │       MCP (streamable-http, POST /mcp)
-           ▼                              ▼
+│    meeting by `domain` to the right skill          │
+└───────────────────┬────────────────────────────┘
+                    │  A2A v0.3.0 (JSON-RPC, /a2a)
+                    ▼
 ┌────────────────────────────────────────────────┐
-│ STANDUP-TOOLS MCP SERVER (:8010) — shared         │
+│ MANAGER AGENT (:8020, AGENT_ROLE=all) — internal  │
+│  ONE agent, BOTH domains:                          │
+│  summarize_standup, deliver_report,                │
+│  summarize_project, deliver_project_report,        │
+│  summarize_period                                  │
+└───────────────────┬────────────────────────────┘
+                    │  MCP (streamable-http, POST /mcp)
+                    ▼
+┌────────────────────────────────────────────────┐
+│ STANDUP-TOOLS MCP SERVER (:8010) — internal       │
 │  get_standup_context, save_summaries,             │
 │  build_excel_report, send_email, record_delivery, │
 │  get_period_context, get_dataentry_context        │
@@ -48,14 +49,16 @@ Frontend (React SPA, :3000)  — left nav: Standup Management / Project Manageme
           PostgreSQL   (Recall.ai + MS Graph external)
 ```
 
-Recall.ai webhooks and the frontend both terminate at the orchestrator only — both agents and the
-MCP server are internal-only (no ports need to be exposed publicly in production).
+The **orchestrator** is the single public app — it serves the SPA, the API and the Recall webhook
+(same origin). The agent and MCP server are internal-only. In prod (Azure Container Apps) this is 3
+Container Apps; see `DEPLOY-AZURE.md`.
 
-**Multi-agent, one image.** The Standup and Project Manager agents run from the *same* `agent/`
-image, selected by `AGENT_ROLE` (`standup`|`project`). `a2a/agent_cards.build_agent_card(role)`
-is the single source of truth for each role's card + skills; `agent/skills/registry.py` maps skill
-ids → handlers per role (replacing the old if/elif dispatch). A meeting's `domain` column decides
-which agent processes it (`orchestrator/react_agent.process_meeting`).
+**One agent, both domains.** The agent runs from the `agent/` image with `AGENT_ROLE=all`, serving
+both standup and project skills from a single process (fewer apps → lower cost). `AGENT_ROLE` also
+accepts `standup`/`project` if you ever want to split them. `a2a/agent_cards.build_agent_card(role)`
+is the single source of truth for a role's card + skills; `agent/skills/registry.py` maps skill ids →
+handlers per role (the `all` registry merges both). A meeting's `domain` column selects the *skill
+name* (`orchestrator/react_agent.process_meeting`), not a separate agent.
 
 **Two domains, shared pipeline.** `standups`/`standup_templates` carry a `domain` column
 (`standup`|`project`); project meetings reuse the *same* Recall bot + transcript pipeline and only
@@ -76,9 +79,14 @@ values bound as parameters. Routes: `orchestrator/routes/dataentry.py`.
 overall/monthly/weekly, calls the domain agent's `summarize_period`, caches each bucket in
 `aggregate_summaries`; `force` bypasses cache).
 
-**Postgres is external, not part of this compose file.** `docker-compose.yml` only runs the 4
-app containers (`standup-mcp`, `standup-agent`, `orchestrator`, `frontend`); `DATABASE_URL` in
-`.env` points at a Postgres you run yourself (defaults to `host.docker.internal:5433`).
+**Frontend is served by the orchestrator.** There is no separate frontend container — the
+orchestrator's image (`Dockerfile.orchestrator`, multi-stage) builds the React SPA and serves it as
+static files (`orchestrator/main.py`, from `STATIC_DIR=/app/static`), so `/api` is same-origin. For
+frontend hot-reload in dev, run `cd frontend && npm run dev` (Vite on :3000 proxying `/api` to :8000).
+
+**Postgres is external, not part of this compose file.** `docker-compose.yml` runs 3 app containers
+(`standup-mcp`, `agent`, `orchestrator`); `DATABASE_URL` in `.env` points at a Postgres you run
+yourself (defaults to `host.docker.internal:5433`).
 
 ## Running the Application
 
@@ -87,11 +95,11 @@ app containers (`standup-mcp`, `standup-agent`, `orchestrator`, `frontend`); `DA
 # Idempotent — safe to re-run any time, never touches existing data.
 psql -U postgres -p 5433 -d standup -f db-setup.sql
 
-# Start everything
+# Start everything — then open the app at http://localhost:8000 (orchestrator serves the SPA)
 docker compose up
 
 # Rebuild a single component after code changes
-docker compose build orchestrator   # or: standup-agent, project-agent, standup-mcp, frontend
+docker compose build orchestrator   # or: agent, standup-mcp
 docker compose up -d --no-deps orchestrator
 
 # Frontend dev server (hot reload, proxies /api to localhost:8000)
@@ -99,15 +107,15 @@ cd frontend && npm install && npm run dev   # http://localhost:3000
 
 # View logs for a specific component
 docker compose logs orchestrator -f
-docker compose logs standup-agent -f
+docker compose logs agent -f
 docker compose logs standup-mcp -f
 
 # Reset all operational data (leaves users + their Data Entry schemas intact)
 docker compose exec postgres psql -U standup -d standup -c "TRUNCATE TABLE email_deliveries, standup_summaries, participant_summaries, aggregate_summaries, utterances, state_transitions, participants, standups CASCADE;"
 ```
 
-Service ports: `orchestrator=8000`, `standup-agent=8020`, `project-agent=8021`, `standup-mcp=8010`,
-`frontend=3000`, `postgres=5432` (compose-local) — **but** `DATABASE_URL` in `.env` defaults to
+Service ports: `orchestrator=8000` (also serves the SPA), `agent=8020`, `standup-mcp=8010`,
+`postgres=5432` (compose-local) — **but** `DATABASE_URL` in `.env` defaults to
 `host.docker.internal:5433`, i.e. a Postgres instance running on the *host* outside this
 compose file. If you want the app to use the compose's own bundled Postgres instead, override
 `DATABASE_URL` to `postgresql+asyncpg://standup:standup@postgres:5432/standup` in `.env`.
@@ -175,7 +183,8 @@ change done.
 ### `a2a/` — hand-rolled A2A v0.3.0 protocol layer (no third-party A2A SDK)
 `a2a_models.py` (Task/Message/Part/Artifact/JSON-RPC/AgentCard Pydantic models),
 `a2a_client.py` (httpx-based client: `get_agent_card`, `send_message`/`send_task`, `get_task`),
-`agent_cards.py` (`STANDUP_AGENT_CARD` — the single source of truth for the agent's 2 skills).
+`agent_cards.py` (`build_agent_card(role)` — the single source of truth for each role's card +
+skills; `all` merges standup + project into one 5-skill card).
 
 ### `shared/` — models, schemas, DB, config (installed nowhere as a package — plain `COPY` +
 `ENV PYTHONPATH=/app` in every Dockerfile; each image only imports the submodules it needs, so
@@ -246,23 +255,27 @@ Required `.env` values (see `.env.example`):
   gracefully and the failure is recorded in `email_deliveries`, not swallowed silently).
 - `JWT_SECRET` (MUST override in production), `JWT_ALGORITHM=HS256`, `JWT_EXPIRY_MINUTES` — multi-user
   auth. `GATEWAY_API_KEY` still exists in config but no longer gates user routes (kept for parity).
-- `AGENT_ROLE` (`standup`|`project`) — set per agent container in `docker-compose.yml`, selects the
-  card + skill set. Both agents run from the same image.
+- `AGENT_ROLE` (`all`|`standup`|`project`, default `all`) — selects the agent's card + skill set.
+  `all` = one agent serving both domains (the default deployment). Same image either way.
 - New, model/protocol routing (all have working defaults — see `.env.example` for the full list):
   `LLM_PROVIDER`/`ORCHESTRATOR_MODEL` (orchestrator's Tier-1 ReAct model),
   `SLM_PROVIDER`/`SUMMARIZE_MODEL`/`DELIVER_MODEL` (agent skills — `SUMMARIZE_MODEL` should stay
   GPT-4o; `DELIVER_MODEL` is the one meant to be swapped for a smaller model later),
-  `STANDUP_AGENT_HOST`/`PORT`, `PROJECT_AGENT_HOST`/`PORT`, `MCP_HOST`/`PORT`.
+  `AGENT_HOST`/`PORT` (the single agent), `MCP_HOST`/`PORT`.
   `SLM_PROVIDER=groq` requires adding `langchain-groq` to `Dockerfile.agent` — not installed by
   default.
 
 ## Frontend
 
-- State: TanStack Query for server data, Zustand (persisted to localStorage) for `apiKey`.
-- The `SummaryPanel` polls every 5s until data appears (`refetchInterval: (data) => !data ? 5_000 : false`).
+- State: TanStack Query for server data, Zustand (persisted to localStorage) for the JWT `token`,
+  `user`, and `theme` (light/dark).
+- The `SummaryPanel` polls until data appears; `StandupDetail`'s `refetchInterval` reads
+  `query.state.data` (React Query v5 passes the query object, not the data).
 - The `LiveStatusStream` component uses native `EventSource` — cannot send auth headers, so
   `/stream` is auth-exempt.
-- `nginx.conf` proxies `/api/` to `orchestrator:8000` (was `gateway:8000` before the migration).
+- Served in prod by the orchestrator (built into its image, same origin) — no nginx, no separate
+  frontend container. `axios` uses relative `/api`. Dev hot-reload: `npm run dev` (Vite proxies
+  `/api` → `:8000`, per `vite.config.ts`).
 - Build: `vite build` (no separate `tsc` step — Vite handles TypeScript).
 - `/features` — static documentation page (features, setup steps, architecture diagram),
   content in `src/content/featuresContent.ts`, rendered with `react-markdown`. No backend

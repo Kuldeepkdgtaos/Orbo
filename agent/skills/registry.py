@@ -54,7 +54,11 @@ _PROJECT_REGISTRY = {
     "summarize_period": _summarize_period,
 }
 
+# 'all' = both domains' skills in one process (summarize_period is shared).
+_ALL_REGISTRY = {**_STANDUP_REGISTRY, **_PROJECT_REGISTRY}
+
 _ROLE_REGISTRIES = {
+    "all": _ALL_REGISTRY,
     "standup": _STANDUP_REGISTRY,
     "project": _PROJECT_REGISTRY,
 }

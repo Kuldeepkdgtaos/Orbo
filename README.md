@@ -15,15 +15,16 @@ weekly rollups that can fold in your Data Entry tables).
 A hierarchical **Agent-to-Agent (A2A) + Model Context Protocol (MCP)** stack:
 
 ```
-Frontend (SPA, nginx)  ──►  Orchestrator (A2A client, FastAPI)
-                                 │  routes each meeting by `domain`
-                     ┌───────────┴───────────┐
-              Standup Manager Agent     Project Manager Agent   (same image, AGENT_ROLE)
-                     └───────────┬───────────┘
-                          Standup-Tools MCP server
-                                 │
-                             PostgreSQL   (+ Recall.ai / MS Graph)
+Orchestrator (FastAPI) ── serves the React SPA + /api + /webhooks (single public app)
+     │  A2A; routes each meeting by `domain` to the right skill
+     ▼
+Manager Agent (AGENT_ROLE=all) ── one agent, both standup + project skills
+     │  MCP
+     ▼
+Standup-Tools MCP server ──► PostgreSQL   (+ Recall.ai / MS Graph)
 ```
+
+Deploys as **3 containers** — orchestrator (public, hosts the UI), agent, mcp.
 
 - **Multi-user auth** (JWT, self-serve signup). Only **Data Entry** is per-user (a dedicated
   `dataentry_<email>` Postgres schema); meetings/summaries are shared.
@@ -39,23 +40,23 @@ Full component detail is in [CLAUDE.md](CLAUDE.md); the migration rationale in
 cp .env.example .env          # fill in Recall / Azure OpenAI / (optional) MS Graph
                               # point DATABASE_URL at your local Postgres
 psql -U postgres -p 5433 -d standup -f db-setup.sql   # apply schema (idempotent)
-docker compose up --build     # http://localhost:3000
+docker compose up --build     # open http://localhost:8000 (orchestrator serves the SPA)
 ```
 
-The frontend proxies `/api` and `/webhooks` to the orchestrator via `ORCHESTRATOR_URL`
-(defaults to the compose orchestrator). For Recall webhooks in local dev, expose the app with
-ngrok and set `RECALL_WEBHOOK_BASE_URL`.
+The orchestrator serves the built SPA and the API same-origin. For Recall webhooks in local dev,
+expose the orchestrator with ngrok and set `RECALL_WEBHOOK_BASE_URL`.
 
 Frontend hot-reload dev server:
 ```bash
-cd frontend && npm install && npm run dev      # proxies /api to :8000
+cd frontend && npm install && npm run dev      # http://localhost:3000, proxies /api to :8000
 ```
 
 ## Deploy (Azure Container Apps + NeonDB)
 
-Push to `main` → GitHub Actions builds 4 images to ACR and updates 5 Container Apps. See
+Push to `main` → GitHub Actions builds 3 images to ACR and updates 3 Container Apps. See
 [DEPLOY-AZURE.md](DEPLOY-AZURE.md) for one-time infra setup, GitHub secrets/variables, and the
-Recall webhook URL. No ngrok in prod — the frontend Container App has a public HTTPS FQDN.
+Recall webhook URL. No ngrok in prod — the orchestrator Container App has a public HTTPS FQDN and
+serves the UI, API, and webhooks.
 
 ## Tech
 FastAPI · LangGraph · Azure OpenAI GPT-4o · MCP (FastMCP) · React + Vite + Tailwind ·

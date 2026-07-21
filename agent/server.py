@@ -92,9 +92,7 @@ async def agent_card():
     """
     card_data = AGENT_CARD.model_dump()
     if card_data.get("supportedInterfaces"):
-        host = settings.agent_host_for(AGENT_ROLE)
-        port = settings.agent_port_for(AGENT_ROLE)
-        base_url = f"{settings.a2a_scheme}://{host}:{port}"
+        base_url = f"{settings.a2a_scheme}://{settings.agent_host}:{settings.agent_port}"
         card_data["supportedInterfaces"][0]["url"] = f"{base_url}/a2a"
     return card_data
 
@@ -268,4 +266,4 @@ def _handle_tasks_cancel(rpc_id: str, params: dict) -> dict:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=settings.agent_port_for(AGENT_ROLE))
+    uvicorn.run(app, host="0.0.0.0", port=settings.agent_port)

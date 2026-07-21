@@ -36,7 +36,7 @@ from ..a2a_registry import agent_registry
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/insights", tags=["insights"])
 
-_DOMAIN_AGENT = {"standup": "standup_agent", "project": "project_agent"}
+_DOMAIN_AGENT = {"standup": "agent", "project": "agent"}
 
 
 # ── Date bucketing ───────────────────────────────────────────────────────────

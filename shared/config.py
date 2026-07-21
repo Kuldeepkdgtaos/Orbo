@@ -42,18 +42,16 @@ class Settings(BaseSettings):
     deliver_model: str = "gpt-4o"               # SLM for deliver_report skill (swap to a smaller model later)
 
     # ── Agent role (which card + skill set this agent process serves) ────────
-    # Set per-container: 'standup' for the Standup Manager, 'project' for the
-    # Project Manager. Both roles run from the same image (agent/server.py).
-    agent_role: str = "standup"                 # standup | project
+    # 'all' (default) → one agent serves BOTH standup + project skills, so a
+    # single agent container covers both domains (fewer apps in prod).
+    # 'standup' / 'project' remain valid if you ever want to split them again.
+    agent_role: str = "all"                     # all | standup | project
 
-    # ── A2A (agents the orchestrator talks to) ───────────────────────────────
+    # ── A2A (the single agent the orchestrator talks to) ─────────────────────
     a2a_scheme: str = "http"
-    standup_agent_enabled: bool = True
-    standup_agent_host: str = "standup-agent"
-    standup_agent_port: int = 8020
-    project_agent_enabled: bool = True
-    project_agent_host: str = "project-agent"
-    project_agent_port: int = 8021
+    agent_enabled: bool = True
+    agent_host: str = "agent"
+    agent_port: int = 8020
 
     # ── MCP (standup-tools server) ───────────────────────────────────────────
     mcp_scheme: str = "http"
@@ -61,12 +59,6 @@ class Settings(BaseSettings):
     mcp_port: int = 8010
 
     model_config = {"env_file": ".env", "extra": "ignore"}
-
-    def agent_host_for(self, role: str) -> str:
-        return self.project_agent_host if role == "project" else self.standup_agent_host
-
-    def agent_port_for(self, role: str) -> int:
-        return self.project_agent_port if role == "project" else self.standup_agent_port
 
 
 settings = Settings()

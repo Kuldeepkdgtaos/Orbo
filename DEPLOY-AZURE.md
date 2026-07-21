@@ -1,33 +1,76 @@
-# Deploying Orbo to Azure Container Apps
+# Deploying Orbo to Azure Container Apps — from zero
 
-One-time infrastructure setup, then every push to `main` auto-deploys via
-`.github/workflows/azure-deploy.yml`. Orbo = **4 images / 5 Container Apps**:
+This is a complete runbook assuming you have **only an Azure subscription** and nothing else.
+Do sections 0–8 **once**; after that, every push to `main` auto-deploys via
+`.github/workflows/azure-deploy.yml`.
+
+Orbo = **3 images / 3 Container Apps**:
 
 | App | Image | Ingress | Target port | Public? |
 |---|---|---|---|---|
-| orchestrator | `orbo-orchestrator` | internal | 8000 | no |
-| standup-agent | `orbo-agent` (role=standup) | internal | 8020 | no |
-| project-agent | `orbo-agent` (role=project) | internal | 8020 | no |
-| standup-mcp | `orbo-mcp` | internal | 8010 | no |
-| frontend | `orbo-frontend` | **external** | 80 | **yes** — the only public app |
+| orchestrator | `orbo-orchestrator` | **external** | 8000 | **yes** — serves the SPA + `/api` + `/webhooks` |
+| agent | `orbo-agent` (`AGENT_ROLE=all`) | internal | 8020 | no — one agent, both domains |
+| mcp | `orbo-mcp` | internal | 8010 | no |
 
-The **frontend** is the single public entrypoint; it proxies `/api` and `/webhooks`
-to the internal orchestrator. So Recall.ai posts to `https://<frontend-fqdn>/webhooks/recall`.
-No ngrok — ACA provides the public HTTPS FQDN.
+The **orchestrator** is the single public app: it serves the built React SPA *and* the API *and*
+the Recall webhook (same origin), so Recall.ai posts to `https://<orchestrator-fqdn>/webhooks/recall`.
+No ngrok — ACA gives a permanent public HTTPS FQDN. (No separate frontend app; no separate
+project-agent — one `agent` serves standup + project skills.)
 
-Prerequisites: Azure CLI (`az`), `psql`, a GitHub repo, and either Docker or `az acr build`.
+**Checklist:** ☐ tools ☐ Azure login ☐ Neon DB ☐ Recall.ai keys ☐ Azure OpenAI ☐ (opt) MS Graph
+☐ RG/ACR/env ☐ build images ☐ create 3 apps ☐ service principal ☐ GitHub secrets/vars ☐ deploy
+☐ Recall webhook ☐ verify.
 
 ---
 
-## 1. Database — NeonDB
+## 0. Install tools + sign in
 
-1. Create a Neon project and a database named `orbo`. (Optionally a separate branch/db for dev.)
-2. Copy the **pooled** connection string from Neon (host looks like `ep-xxx-pooler.<region>.aws.neon.tech`).
-3. Load the schema once (Neon requires TLS — use the libpq form with `sslmode=require`):
+Install locally (Windows: `winget install`, or the linked installers):
+- **Azure CLI** — https://aka.ms/installazurecli  (`az version` to check)
+- **Git** and **GitHub CLI** (`gh`) — https://cli.github.com
+- **psql** (PostgreSQL client) — to load the schema into Neon
+- Docker is **optional** (we build images in the cloud with `az acr build`).
+
+```bash
+az login                              # opens a browser
+az account list -o table              # find your subscription
+az account set --subscription "<YOUR-SUBSCRIPTION-NAME-OR-ID>"
+az account show -o table              # confirm the active subscription
+
+# Register the resource providers this deployment uses (one-time per subscription)
+az provider register --namespace Microsoft.App
+az provider register --namespace Microsoft.OperationalInsights
+az provider register --namespace Microsoft.ContainerRegistry
+az provider register --namespace Microsoft.CognitiveServices
+# add the Container Apps CLI extension
+az extension add --name containerapp --upgrade
+```
+
+Pick names now and reuse them throughout (must be globally unique where noted):
+```bash
+RG=rg-orbo
+LOCATION=eastus
+ACR=<yourname>orboacr        # ACR name: 5-50 lowercase alphanumeric, GLOBALLY UNIQUE
+ENVN=orbo-env
+AOAI=<yourname>-orbo-openai  # Azure OpenAI resource name, GLOBALLY UNIQUE
+```
+
+```bash
+az group create -n $RG -l $LOCATION
+```
+
+---
+
+## 1. Database — NeonDB (free managed Postgres)
+
+1. Sign up at https://neon.tech and create a project; inside it, create a database named `orbo`.
+2. In the Neon dashboard → **Connection Details**, copy the **pooled** connection string (host looks
+   like `ep-xxx-pooler.<region>.aws.neon.tech`).
+3. Load Orbo's schema once (Neon requires TLS; psql uses `sslmode=require`):
    ```bash
    psql "postgresql://<user>:<pw>@<ep>-pooler.<region>.aws.neon.tech/orbo?sslmode=require" -f db-setup.sql
    ```
-4. The value you'll store as the GitHub secret `DATABASE_URL` (asyncpg form):
+4. Note the **asyncpg** form of the URL — this becomes the GitHub secret `DATABASE_URL`:
    ```
    postgresql+asyncpg://<user>:<pw>@<ep>-pooler.<region>.aws.neon.tech/orbo?ssl=require
    ```
@@ -35,70 +78,113 @@ Prerequisites: Azure CLI (`az`), `psql`, a GitHub repo, and either Docker or `az
 
 ---
 
-## 2. Azure infrastructure (`az` CLI)
+## 2. Recall.ai (bot + transcripts)
+
+1. Sign up at https://recall.ai and grab your **API key** (Settings → API Keys). → `RECALL_API_KEY`.
+2. Note your region (e.g. `us-east-1`). → `RECALL_REGION`.
+3. You'll create the webhook + its **signing secret** in **section 9** (after the app has a public
+   URL). That signing secret becomes `RECALL_WEBHOOK_SECRET`.
+
+---
+
+## 3. Azure OpenAI (GPT-4o)
+
+If you already have an Azure OpenAI resource with a `gpt-4o` deployment, **reuse it** (just grab its
+endpoint + key) and skip to section 4. Otherwise create one:
 
 ```bash
-# --- pick your values ---
-RG=rg-orbo
-LOCATION=eastus
-ACR=<yourname>orboacr            # globally-unique, lowercase alphanumeric
-ENVN=orbo-env
+az cognitiveservices account create -n $AOAI -g $RG -l $LOCATION \
+  --kind OpenAI --sku S0 --custom-domain $AOAI --yes
 
-az extension add --name containerapp --upgrade
-az provider register --namespace Microsoft.App
-az provider register --namespace Microsoft.OperationalInsights
+# Deploy the gpt-4o model (adjust --model-version to one available in your region)
+az cognitiveservices account deployment create -g $RG -n $AOAI \
+  --deployment-name gpt-4o --model-name gpt-4o --model-version 2024-08-06 \
+  --model-format OpenAI --sku-name Standard --sku-capacity 10
 
-az group create -n $RG -l $LOCATION
+# Grab the endpoint + key (save these)
+az cognitiveservices account show -n $AOAI -g $RG --query properties.endpoint -o tsv
+az cognitiveservices account keys list -n $AOAI -g $RG --query key1 -o tsv
+```
+→ endpoint = `AZURE_OPENAI_ENDPOINT`, key = `AZURE_OPENAI_API_KEY`, deployment name = `gpt-4o`.
 
-# Container registry (admin creds are what the pipeline's ACR_USERNAME/PASSWORD use)
+> Azure OpenAI may require access approval on some subscriptions, and model availability/quota
+> varies by region. If `deployment create` fails, pick a region/version from the Azure AI Foundry
+> portal or request quota there.
+
+---
+
+## 4. Microsoft Graph email (OPTIONAL — skip to leave email delivery disabled)
+
+Orbo emails the digest via MS Graph. Leave these blank to skip (delivery degrades gracefully and is
+recorded as failed). To enable, in the Azure Portal:
+1. **Entra ID → App registrations → New registration** (single tenant is fine).
+2. **API permissions → Add → Microsoft Graph → Application permissions → `Mail.Send`** → **Grant
+   admin consent**.
+3. **Certificates & secrets → New client secret** → copy the value.
+4. Collect: Directory (tenant) ID, Application (client) ID, the secret, and a sender mailbox address.
+   → `MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_SENDER_EMAIL`.
+
+---
+
+## 5. Container registry + Container Apps environment
+
+```bash
+# Registry (admin creds are what the pipeline's ACR_USERNAME/PASSWORD use)
 az acr create -n $ACR -g $RG --sku Basic --admin-enabled true
 
-# Container Apps environment
+# Container Apps environment (creates a Log Analytics workspace automatically)
 az containerapp env create -n $ENVN -g $RG -l $LOCATION
 ```
 
-### 2a. Seed the images (first push)
-The pipeline's deploy step runs `az containerapp update`, which needs the apps to exist —
-and apps need an image. Build the 4 images into ACR once (no local Docker needed):
+---
+
+## 6. Build the 3 images into ACR (no local Docker needed)
+
+The pipeline's deploy step runs `az containerapp update`, which needs the apps to already exist —
+and apps need an image. Build once in the cloud (the orchestrator image also builds the SPA):
 ```bash
 az acr build -r $ACR -t orbo-orchestrator:prod-latest -f Dockerfile.orchestrator .
 az acr build -r $ACR -t orbo-agent:prod-latest        -f Dockerfile.agent .
 az acr build -r $ACR -t orbo-mcp:prod-latest          -f Dockerfile.mcp .
-az acr build -r $ACR -t orbo-frontend:prod-latest     -f frontend/Dockerfile frontend
 ```
 
-### 2b. Create the 5 apps
+---
+
+## 7. Create the 3 Container Apps
+
 ```bash
 ACR_SERVER=$ACR.azurecr.io
 ACR_USER=$(az acr credential show -n $ACR --query username -o tsv)
 ACR_PASS=$(az acr credential show -n $ACR --query 'passwords[0].value' -o tsv)
 REG="--registry-server $ACR_SERVER --registry-username $ACR_USER --registry-password $ACR_PASS"
 
-# internal apps
+# internal: tools
 az containerapp create -n orbo-mcp -g $RG --environment $ENVN $REG \
   --image $ACR_SERVER/orbo-mcp:prod-latest --ingress internal --target-port 8010 \
   --min-replicas 0 --max-replicas 2
 
-az containerapp create -n orbo-standup-agent -g $RG --environment $ENVN $REG \
+# internal: one agent, both domains
+az containerapp create -n orbo-agent -g $RG --environment $ENVN $REG \
   --image $ACR_SERVER/orbo-agent:prod-latest --ingress internal --target-port 8020 \
-  --min-replicas 0 --max-replicas 2 --env-vars AGENT_ROLE=standup
+  --min-replicas 0 --max-replicas 2 --env-vars AGENT_ROLE=all
 
-az containerapp create -n orbo-project-agent -g $RG --environment $ENVN $REG \
-  --image $ACR_SERVER/orbo-agent:prod-latest --ingress internal --target-port 8020 \
-  --min-replicas 0 --max-replicas 2 --env-vars AGENT_ROLE=project
-
+# public: orchestrator serves the SPA + /api + /webhooks
 az containerapp create -n orbo-orchestrator -g $RG --environment $ENVN $REG \
-  --image $ACR_SERVER/orbo-orchestrator:prod-latest --ingress internal --target-port 8000 \
+  --image $ACR_SERVER/orbo-orchestrator:prod-latest --ingress external --target-port 8000 \
   --min-replicas 1 --max-replicas 3
-
-# public app
-az containerapp create -n orbo-frontend -g $RG --environment $ENVN $REG \
-  --image $ACR_SERVER/orbo-frontend:prod-latest --ingress external --target-port 80 \
-  --min-replicas 1 --max-replicas 2
 ```
-The full env-var wiring is applied by the pipeline on every deploy — you don't need to set it here.
+The full per-app env-var wiring is applied by the pipeline on every deploy — you don't set it here.
 
-### 2c. Service principal → `AZURE_CREDENTIALS`
+Grab the public URL (used in section 9 for the Recall webhook and to open the app):
+```bash
+az containerapp show -n orbo-orchestrator -g $RG --query properties.configuration.ingress.fqdn -o tsv
+```
+
+---
+
+## 8. Service principal + GitHub configuration
+
+### 8a. Service principal → `AZURE_CREDENTIALS`
 ```bash
 SUB=$(az account show --query id -o tsv)
 az ad sp create-for-rbac --name orbo-deploy \
@@ -106,60 +192,85 @@ az ad sp create-for-rbac --name orbo-deploy \
   --scopes /subscriptions/$SUB/resourceGroups/$RG \
   --sdk-auth
 ```
-Copy the JSON output → GitHub secret `AZURE_CREDENTIALS`.
+Copy the **entire JSON** output — it's the `AZURE_CREDENTIALS` secret.
 
----
+### 8b. GitHub secrets + variables
+Set them in the UI (**Settings → Secrets and variables → Actions**, and **Settings → Environments →
+New environment → `production`**), or scripted with the `gh` CLI from the repo root:
 
-## 3. GitHub configuration (single `production` Environment)
-
-**Repo → Settings → Secrets and variables → Actions**
-
-Repo **Variables**: `ACR_NAME` = `<yourname>orboacr`
-Repo **Secrets**: `ACR_USERNAME`, `ACR_PASSWORD` (from `az acr credential show -n $ACR`).
-
-**Repo → Settings → Environments → New environment → `production`**
-
-Environment **Secrets**:
-`AZURE_CREDENTIALS`, `DATABASE_URL` (asyncpg Neon URL), `JWT_SECRET` (long random),
-`RECALL_API_KEY`, `RECALL_WEBHOOK_SECRET`, `AZURE_OPENAI_API_KEY`,
-`MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`.
-
-Environment **Variables**:
-`RESOURCE_GROUP`=rg-orbo, `ORCHESTRATOR_APP`=orbo-orchestrator, `STANDUP_AGENT_APP`=orbo-standup-agent,
-`PROJECT_AGENT_APP`=orbo-project-agent, `MCP_APP`=orbo-mcp, `FRONTEND_APP`=orbo-frontend,
-`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`=gpt-4o, `AZURE_OPENAI_API_VERSION`=2024-08-01-preview,
-`RECALL_REGION`, `MS_GRAPH_SENDER_EMAIL`, `LLM_PROVIDER`=azure_openai, `ORCHESTRATOR_MODEL`=gpt-4o,
-`SLM_PROVIDER`=azure_openai, `SUMMARIZE_MODEL`=gpt-4o, `DELIVER_MODEL`=gpt-4o,
-`JWT_ALGORITHM`=HS256, `JWT_EXPIRY_MINUTES`=10080, `LOG_LEVEL`=INFO.
-
----
-
-## 4. First deploy
-
-Push to `main` (or run the workflow via **Actions → Run workflow**). The pipeline builds the 4
-images, then `az containerapp update`s all 5 apps with the full env set, wiring internal FQDNs +
-`443`/`https` automatically and pointing the frontend at the orchestrator.
-
-Get the public URL:
 ```bash
-az containerapp show -n orbo-frontend -g rg-orbo --query properties.configuration.ingress.fqdn -o tsv
+gh auth login
+
+# --- Repo-level (shared) ---
+gh variable set ACR_NAME     --body "$ACR"
+gh secret   set ACR_USERNAME --body "$(az acr credential show -n $ACR --query username -o tsv)"
+gh secret   set ACR_PASSWORD --body "$(az acr credential show -n $ACR --query 'passwords[0].value' -o tsv)"
+
+# --- Environment 'production' — SECRETS ---
+gh secret set AZURE_CREDENTIALS      --env production --body '<paste the sdk-auth JSON>'
+gh secret set DATABASE_URL           --env production --body 'postgresql+asyncpg://…?ssl=require'
+gh secret set JWT_SECRET             --env production --body "$(openssl rand -hex 32)"
+gh secret set RECALL_API_KEY         --env production --body '<recall api key>'
+gh secret set RECALL_WEBHOOK_SECRET  --env production --body '<set after section 9>'
+gh secret set AZURE_OPENAI_API_KEY   --env production --body '<aoai key>'
+gh secret set MS_GRAPH_TENANT_ID     --env production --body '<or empty>'
+gh secret set MS_GRAPH_CLIENT_ID     --env production --body '<or empty>'
+gh secret set MS_GRAPH_CLIENT_SECRET --env production --body '<or empty>'
+
+# --- Environment 'production' — VARIABLES ---
+gh variable set RESOURCE_GROUP           --env production --body "$RG"
+gh variable set ORCHESTRATOR_APP         --env production --body "orbo-orchestrator"
+gh variable set AGENT_APP                --env production --body "orbo-agent"
+gh variable set MCP_APP                  --env production --body "orbo-mcp"
+gh variable set AZURE_OPENAI_ENDPOINT    --env production --body '<aoai endpoint>'
+gh variable set AZURE_OPENAI_DEPLOYMENT  --env production --body "gpt-4o"
+gh variable set AZURE_OPENAI_API_VERSION --env production --body "2024-08-01-preview"
+gh variable set RECALL_REGION            --env production --body "us-east-1"
+gh variable set MS_GRAPH_SENDER_EMAIL    --env production --body '<or empty>'
+gh variable set LLM_PROVIDER             --env production --body "azure_openai"
+gh variable set ORCHESTRATOR_MODEL       --env production --body "gpt-4o"
+gh variable set SLM_PROVIDER             --env production --body "azure_openai"
+gh variable set SUMMARIZE_MODEL          --env production --body "gpt-4o"
+gh variable set DELIVER_MODEL            --env production --body "gpt-4o"
+gh variable set JWT_ALGORITHM            --env production --body "HS256"
+gh variable set JWT_EXPIRY_MINUTES       --env production --body "10080"
+gh variable set LOG_LEVEL                --env production --body "INFO"
 ```
+> `RECALL_WEBHOOK_SECRET` can be set now with a placeholder and updated after section 9; the app
+> only needs it when verifying incoming webhooks.
 
 ---
 
-## 5. Point Recall.ai at the webhook
+## 9. First deploy + Recall webhook
 
-In Recall.ai, set the webhook URL to:
-```
-https://<frontend-fqdn>/webhooks/recall
-```
-The frontend proxies it to the internal orchestrator. (This FQDN is stable, unlike ngrok.)
+1. **Deploy**: push to `main` (or **Actions → Build and Deploy → Run workflow**). The pipeline builds
+   the 3 images and `az containerapp update`s all 3 apps, wiring the internal FQDNs + `443`/`https`
+   and setting the orchestrator's own FQDN as the Recall webhook base.
+2. **Open the app** at `https://<orchestrator-fqdn>` and register a user.
+3. **Recall webhook**: in Recall.ai, add a webhook pointing to
+   ```
+   https://<orchestrator-fqdn>/webhooks/recall
+   ```
+   Copy its **signing secret** → update the `RECALL_WEBHOOK_SECRET` GitHub secret → re-run the
+   workflow (or `az containerapp update` the orchestrator) so it picks up the new value.
 
 ---
 
-## Notes
-- **Cold starts**: agents + mcp scale to zero; the orchestrator's 3-retry post-meeting trigger
-  tolerates the first-hit wake-up. Orchestrator + frontend stay warm (`min-replicas 1`).
+## 10. Verify end-to-end
+- `https://<orchestrator-fqdn>` loads the app; register/login works (confirms orchestrator + Neon).
+- In Neon, `\dt` shows the Orbo tables and a `dataentry_<email>` schema after signup.
+- Create a meeting, start it — the Recall bot joins; after it ends, a summary appears
+  (agent + mcp wake from scale-to-zero; watch `az containerapp logs show -n orbo-orchestrator -g $RG`).
+- Data Entry: create a table + a row → persists to your Neon schema.
+- Summaries: generate an aggregate over a date range.
+
+---
+
+## Notes & troubleshooting
+- **Cold starts**: the agent + mcp scale to zero; the orchestrator's 3-retry post-meeting trigger
+  tolerates first-hit wake-ups. The orchestrator (public app) stays warm (`min-replicas 1`).
 - **SSE**: ACA ingress caps long-lived requests; the live-status stream reconnects automatically.
-- **Data Entry schemas** (`dataentry_<email>`) are created at registration time inside NeonDB —
-  nothing extra to provision.
+- **Logs**: `az containerapp logs show -n <app> -g $RG --follow`.
+- **Redeploy manually**: `az containerapp update -n <app> -g $RG --image $ACR.azurecr.io/<img>:prod-latest`.
+- **First pipeline run before apps exist** will fail at the deploy step — that's why sections 5–7
+  create the apps first. The build jobs still succeed and push images.
