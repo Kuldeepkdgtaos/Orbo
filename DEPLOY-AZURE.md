@@ -138,26 +138,45 @@ az containerapp env create -n $ENVN -g $RG -l $LOCATION
 
 ---
 
-## 6. Build the 3 images into ACR (no local Docker needed)
+## 6. Build the 3 images into ACR
 
-The pipeline's deploy step runs `az containerapp update`, which needs the apps to already exist —
-and apps need an image. Build once in the cloud (the orchestrator image also builds the SPA).
+The apps need images to exist before `az containerapp update` (the pipeline) can run. Build the 3
+images (the orchestrator image also builds the SPA) and push them to ACR.
 
-`az acr build … .` uploads the **current directory** as the build context, so you must run it
-**from inside a clone of the repo** (otherwise you get `Unable to find 'Dockerfile.orchestrator'`).
-The repo is private — clone with a GitHub **Personal Access Token**:
+> ⚠️ **`az acr build` may be blocked on your subscription** with
+> `TasksOperationsNotAllowed` — it uses server-side **ACR Tasks**, which are disabled on many
+> free-trial / sponsored / student / CSP subscriptions. If so, use **Option A** (local Docker) or
+> **Option B** (the GitHub pipeline) below. `az acr build` is only the convenient path when Tasks
+> are enabled.
+
+### Option A — build locally with Docker, push to ACR (works regardless of ACR Tasks)
+On a machine with Docker (your laptop), from the repo root:
 ```bash
-git clone https://github.com/Kuldeepkdgtaos/Orbo.git   # prompts for username + PAT
-cd Orbo
+az acr login -n $ACR
+docker build -t $ACR.azurecr.io/orbo-orchestrator:prod-latest -f Dockerfile.orchestrator .
+docker build -t $ACR.azurecr.io/orbo-agent:prod-latest        -f Dockerfile.agent .
+docker build -t $ACR.azurecr.io/orbo-mcp:prod-latest          -f Dockerfile.mcp .
+docker push $ACR.azurecr.io/orbo-orchestrator:prod-latest
+docker push $ACR.azurecr.io/orbo-agent:prod-latest
+docker push $ACR.azurecr.io/orbo-mcp:prod-latest
 ```
-Then build (still in the same shell, so `$ACR` from §0 is set):
+Container Apps run linux/amd64; on an amd64 host no `--platform` flag is needed (on Apple Silicon
+add `--platform linux/amd64`). Verify: `az acr repository list -n $ACR -o table`.
+
+### Option B — let the GitHub Actions pipeline build them (no local Docker, no ACR Tasks)
+The pipeline builds on GitHub runners and pushes to ACR (unaffected by ACR Tasks). Do §8's GitHub
+config first (at least `ACR_NAME` var + `ACR_USERNAME`/`ACR_PASSWORD` secrets), then **Actions → Run
+workflow**. The 3 build jobs push the images; the deploy job will fail until the apps exist (§7) —
+that's expected. After §7, re-run the workflow so deploy succeeds.
+
+### Option C — `az acr build` (only if ACR Tasks are enabled on your subscription)
+Run from inside a clone of the repo (`.` = the build context):
 ```bash
+git clone https://github.com/Kuldeepkdgtaos/Orbo.git && cd Orbo   # username + PAT for the private repo
 az acr build -r $ACR -t orbo-orchestrator:prod-latest -f Dockerfile.orchestrator .
 az acr build -r $ACR -t orbo-agent:prod-latest        -f Dockerfile.agent .
 az acr build -r $ACR -t orbo-mcp:prod-latest          -f Dockerfile.mcp .
 ```
-> Alternative (no clone): pass the git URL as the context —
-> `az acr build -r $ACR -t orbo-orchestrator:prod-latest -f Dockerfile.orchestrator https://<PAT>@github.com/Kuldeepkdgtaos/Orbo.git`
 
 ---
 
