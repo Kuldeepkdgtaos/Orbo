@@ -188,32 +188,32 @@ az acr build -r $ACR -t orbo-mcp:prod-latest          -f Dockerfile.mcp .
 
 ## 7. Create the 3 Container Apps
 
-```bash
-ACR_SERVER=$ACR.azurecr.io
-ACR_USER=$(az acr credential show -n $ACR --query username -o tsv)
-ACR_PASS=$(az acr credential show -n $ACR --query 'passwords[0].value' -o tsv)
-REG="--registry-server $ACR_SERVER --registry-username $ACR_USER --registry-password $ACR_PASS"
+> Run in **Cloud Shell**. The commands below are **single-line with placeholders** so they work in
+> both Bash *and* PowerShell (the `$VAR` + `\`-continuation + `$REG`-splat style is bash-only).
+> Replace `<RG>` (resource group), `<ENV>` (Container Apps env), `<ACR_USER>`/`<ACR_PASS>` with your
+> values:
+>
+> ```bash
+> az acr show -n <acr> --query resourceGroup -o tsv     # -> <RG>
+> az containerapp env list -o table                     # -> <ENV>  (create with `az containerapp env create -n orbo-env -g <RG> -l eastus` if none)
+> az acr credential show -n <acr>                        # -> <ACR_USER> + <ACR_PASS>
+> ```
 
+```bash
 # internal: tools
-az containerapp create -n orbo-mcp -g $RG --environment $ENVN $REG \
-  --image $ACR_SERVER/orbo-mcp:prod-latest --ingress internal --target-port 8010 \
-  --min-replicas 0 --max-replicas 2
+az containerapp create -n orbo-mcp -g <RG> --environment <ENV> --image <acr>.azurecr.io/orbo-mcp:prod-latest --ingress internal --target-port 8010 --min-replicas 0 --max-replicas 2 --registry-server <acr>.azurecr.io --registry-username <ACR_USER> --registry-password <ACR_PASS>
 
 # internal: one agent, both domains
-az containerapp create -n orbo-agent -g $RG --environment $ENVN $REG \
-  --image $ACR_SERVER/orbo-agent:prod-latest --ingress internal --target-port 8020 \
-  --min-replicas 0 --max-replicas 2 --env-vars AGENT_ROLE=all
+az containerapp create -n orbo-agent -g <RG> --environment <ENV> --image <acr>.azurecr.io/orbo-agent:prod-latest --ingress internal --target-port 8020 --min-replicas 0 --max-replicas 2 --registry-server <acr>.azurecr.io --registry-username <ACR_USER> --registry-password <ACR_PASS> --env-vars AGENT_ROLE=all
 
 # public: orchestrator serves the SPA + /api + /webhooks
-az containerapp create -n orbo-orchestrator -g $RG --environment $ENVN $REG \
-  --image $ACR_SERVER/orbo-orchestrator:prod-latest --ingress external --target-port 8000 \
-  --min-replicas 1 --max-replicas 3
+az containerapp create -n orbo-orchestrator -g <RG> --environment <ENV> --image <acr>.azurecr.io/orbo-orchestrator:prod-latest --ingress external --target-port 8000 --min-replicas 1 --max-replicas 3 --registry-server <acr>.azurecr.io --registry-username <ACR_USER> --registry-password <ACR_PASS>
 ```
 The full per-app env-var wiring is applied by the pipeline on every deploy — you don't set it here.
 
 Grab the public URL (used in section 9 for the Recall webhook and to open the app):
 ```bash
-az containerapp show -n orbo-orchestrator -g $RG --query properties.configuration.ingress.fqdn -o tsv
+az containerapp show -n orbo-orchestrator -g <RG> --query properties.configuration.ingress.fqdn -o tsv
 ```
 
 ---
