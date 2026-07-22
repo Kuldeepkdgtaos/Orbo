@@ -249,7 +249,7 @@ gh secret set JWT_SECRET             --env production --body "<64-char random>"
 #   generate the value with:  python -c "import secrets; print(secrets.token_hex(32))"
 #   (openssl is not available in Windows PowerShell)
 gh secret set RECALL_API_KEY         --env production --body '<recall api key>'
-gh secret set RECALL_WEBHOOK_SECRET  --env production --body '<set after section 9>'
+gh secret set RECALL_WEBHOOK_SECRET  --env production --body ''   # optional — blank skips signature verification (§9)
 gh secret set AZURE_OPENAI_API_KEY   --env production --body '<aoai key>'
 gh secret set MS_GRAPH_TENANT_ID     --env production --body '<or empty>'
 gh secret set MS_GRAPH_CLIENT_ID     --env production --body '<or empty>'
@@ -263,7 +263,7 @@ gh variable set MCP_APP                  --env production --body "orbo-mcp"
 gh variable set AZURE_OPENAI_ENDPOINT    --env production --body '<aoai endpoint>'
 gh variable set AZURE_OPENAI_DEPLOYMENT  --env production --body "gpt-4o"
 gh variable set AZURE_OPENAI_API_VERSION --env production --body "2024-08-01-preview"
-gh variable set RECALL_REGION            --env production --body "us-east-1"
+gh variable set RECALL_REGION            --env production --body "us-west-2"  # MUST match your Recall account region (dashboard top-left), e.g. US West (Oregon)=us-west-2
 gh variable set MS_GRAPH_SENDER_EMAIL    --env production --body '<or empty>'
 gh variable set LLM_PROVIDER             --env production --body "azure_openai"
 gh variable set ORCHESTRATOR_MODEL       --env production --body "gpt-4o"
@@ -274,23 +274,26 @@ gh variable set JWT_ALGORITHM            --env production --body "HS256"
 gh variable set JWT_EXPIRY_MINUTES       --env production --body "10080"
 gh variable set LOG_LEVEL                --env production --body "INFO"
 ```
-> `RECALL_WEBHOOK_SECRET` can be set now with a placeholder and updated after section 9; the app
-> only needs it when verifying incoming webhooks.
+> `RECALL_WEBHOOK_SECRET` is **optional** — leave it blank to skip Svix signature verification (the
+> app accepts webhooks either way). Don't set a *wrong* value: a non-empty-but-mismatched secret
+> makes the app reject real webhooks with 401.
 
 ---
 
-## 9. First deploy + Recall webhook
+## 9. First deploy + Recall
 
 1. **Deploy**: push to `main` (or **Actions → Build and Deploy → Run workflow**). The pipeline builds
    the 3 images and `az containerapp update`s all 3 apps, wiring the internal FQDNs + `443`/`https`
-   and setting the orchestrator's own FQDN as the Recall webhook base.
+   and setting the orchestrator's own FQDN as `RECALL_WEBHOOK_BASE_URL`.
 2. **Open the app** at `https://<orchestrator-fqdn>` and register a user.
-3. **Recall webhook**: in Recall.ai, add a webhook pointing to
-   ```
-   https://<orchestrator-fqdn>/webhooks/recall
-   ```
-   Copy its **signing secret** → update the `RECALL_WEBHOOK_SECRET` GitHub secret → re-run the
-   workflow (or `az containerapp update` the orchestrator) so it picks up the new value.
+3. **Recall — no dashboard setup needed.** Orbo creates a bot via the API each time a meeting is
+   started and registers the webhook URL *per-bot* (`RECALL_WEBHOOK_BASE_URL/webhooks/recall`). You
+   do **not** add an endpoint in the Recall dashboard, and no persistent bot appears there — both are
+   expected. Just make sure:
+   - **`RECALL_REGION`** matches your Recall account region (dashboard top-left; e.g. *US West
+     (Oregon)* → `us-west-2`). A wrong region makes bot creation fail.
+   - `RECALL_WEBHOOK_SECRET` is **optional** — blank skips Svix signature verification and the app
+     still works. Only set it (from Recall → Webhooks → Settings) if you want signatures verified.
 
 ---
 

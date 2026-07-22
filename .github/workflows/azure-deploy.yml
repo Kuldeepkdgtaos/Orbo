@@ -143,7 +143,7 @@ jobs:
           [[ -z "${{ secrets.DATABASE_URL }}"          ]] && missing+=("secret:DATABASE_URL")
           [[ -z "${{ secrets.JWT_SECRET }}"            ]] && missing+=("secret:JWT_SECRET")
           [[ -z "${{ secrets.RECALL_API_KEY }}"        ]] && missing+=("secret:RECALL_API_KEY")
-          [[ -z "${{ secrets.RECALL_WEBHOOK_SECRET }}" ]] && missing+=("secret:RECALL_WEBHOOK_SECRET")
+          # RECALL_WEBHOOK_SECRET is optional (blank = skip Svix verification) — not required here.
           [[ -z "${{ secrets.AZURE_OPENAI_API_KEY }}"  ]] && missing+=("secret:AZURE_OPENAI_API_KEY")
           [[ -z "${{ vars.ACR_NAME }}"                 ]] && missing+=("var:ACR_NAME")
           [[ -z "${{ vars.RESOURCE_GROUP }}"           ]] && missing+=("var:RESOURCE_GROUP")
