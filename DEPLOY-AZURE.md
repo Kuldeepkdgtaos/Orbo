@@ -263,7 +263,7 @@ gh variable set MCP_APP                  --env production --body "orbo-mcp"
 gh variable set AZURE_OPENAI_ENDPOINT    --env production --body '<aoai endpoint>'
 gh variable set AZURE_OPENAI_DEPLOYMENT  --env production --body "gpt-4o"
 gh variable set AZURE_OPENAI_API_VERSION --env production --body "2024-08-01-preview"
-gh variable set RECALL_REGION            --env production --body "us-west-2"  # MUST match your Recall account region (dashboard top-left), e.g. US West (Oregon)=us-west-2
+gh variable set RECALL_REGION            --env production --body "us-east-1"  # MUST match the region of the account that owns RECALL_API_KEY (e.g. us-east-1, us-west-2, eu-central-1)
 gh variable set MS_GRAPH_SENDER_EMAIL    --env production --body '<or empty>'
 gh variable set LLM_PROVIDER             --env production --body "azure_openai"
 gh variable set ORCHESTRATOR_MODEL       --env production --body "gpt-4o"
@@ -290,8 +290,9 @@ gh variable set LOG_LEVEL                --env production --body "INFO"
    started and registers the webhook URL *per-bot* (`RECALL_WEBHOOK_BASE_URL/webhooks/recall`). You
    do **not** add an endpoint in the Recall dashboard, and no persistent bot appears there — both are
    expected. Just make sure:
-   - **`RECALL_REGION`** matches your Recall account region (dashboard top-left; e.g. *US West
-     (Oregon)* → `us-west-2`). A wrong region makes bot creation fail.
+   - **`RECALL_REGION`** matches the region of the account that owns `RECALL_API_KEY` (it's tied to
+     the key, not to whichever dashboard you're viewing) — e.g. `us-east-1`. A wrong region makes
+     bot creation fail.
    - `RECALL_WEBHOOK_SECRET` is **optional** — blank skips Svix signature verification and the app
      still works. Only set it (from Recall → Webhooks → Settings) if you want signatures verified.
 
