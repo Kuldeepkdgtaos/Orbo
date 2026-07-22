@@ -245,7 +245,9 @@ gh secret   set ACR_PASSWORD --body "$(az acr credential show -n $ACR --query 'p
 # --- Environment 'production' — SECRETS ---
 gh secret set AZURE_CREDENTIALS      --env production --body '<paste the sdk-auth JSON>'
 gh secret set DATABASE_URL           --env production --body 'postgresql+asyncpg://…?ssl=require'
-gh secret set JWT_SECRET             --env production --body "$(openssl rand -hex 32)"
+gh secret set JWT_SECRET             --env production --body "<64-char random>"
+#   generate the value with:  python -c "import secrets; print(secrets.token_hex(32))"
+#   (openssl is not available in Windows PowerShell)
 gh secret set RECALL_API_KEY         --env production --body '<recall api key>'
 gh secret set RECALL_WEBHOOK_SECRET  --env production --body '<set after section 9>'
 gh secret set AZURE_OPENAI_API_KEY   --env production --body '<aoai key>'
