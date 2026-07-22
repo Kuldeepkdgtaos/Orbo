@@ -11,19 +11,18 @@ name: Build and Deploy to Azure Container Apps
 #                        agent serving BOTH standup + project skills.
 #   orbo-mcp          -> mcp           (internal, :8010) — tools.
 #
-# ── Required GitHub config (single `production` Environment) ──────────────────
-# Repo Variables:  ACR_NAME
-# Repo Secrets:    ACR_USERNAME, ACR_PASSWORD
-# Environment (production) Secrets:
-#   AZURE_CREDENTIALS, DATABASE_URL, JWT_SECRET, RECALL_API_KEY,
-#   RECALL_WEBHOOK_SECRET, AZURE_OPENAI_API_KEY,
-#   MS_GRAPH_TENANT_ID, MS_GRAPH_CLIENT_ID, MS_GRAPH_CLIENT_SECRET
-# Environment (production) Variables:
-#   RESOURCE_GROUP, ORCHESTRATOR_APP, AGENT_APP, MCP_APP,
-#   AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, AZURE_OPENAI_API_VERSION,
-#   RECALL_REGION, MS_GRAPH_SENDER_EMAIL, LLM_PROVIDER, ORCHESTRATOR_MODEL,
-#   SLM_PROVIDER, SUMMARIZE_MODEL, DELIVER_MODEL, JWT_ALGORITHM,
-#   JWT_EXPIRY_MINUTES, LOG_LEVEL
+# ── Required GitHub config ────────────────────────────────────────────────────
+# ALL jobs run under the `production` Environment, so every secret/variable below
+# can live in the production Environment (repo-level also works — environment
+# jobs can read both). Put them wherever is convenient, but be consistent.
+#   Variables: ACR_NAME, RESOURCE_GROUP, ORCHESTRATOR_APP, AGENT_APP, MCP_APP,
+#     AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, AZURE_OPENAI_API_VERSION,
+#     RECALL_REGION, MS_GRAPH_SENDER_EMAIL, LLM_PROVIDER, ORCHESTRATOR_MODEL,
+#     SLM_PROVIDER, SUMMARIZE_MODEL, DELIVER_MODEL, JWT_ALGORITHM,
+#     JWT_EXPIRY_MINUTES, LOG_LEVEL
+#   Secrets: ACR_USERNAME, ACR_PASSWORD, AZURE_CREDENTIALS, DATABASE_URL,
+#     JWT_SECRET, RECALL_API_KEY, RECALL_WEBHOOK_SECRET, AZURE_OPENAI_API_KEY,
+#     MS_GRAPH_TENANT_ID, MS_GRAPH_CLIENT_ID, MS_GRAPH_CLIENT_SECRET
 # See DEPLOY-AZURE.md for one-time infra creation.
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -37,8 +36,6 @@ on:
   workflow_dispatch:
 
 env:
-  ACR_NAME: ${{ vars.ACR_NAME }}
-  ACR_URL: ${{ vars.ACR_NAME }}.azurecr.io
   ENV_LABEL: prod
 
 jobs:
@@ -55,16 +52,19 @@ jobs:
           echo "event=${{ github.event_name }} push=$PUSH"
 
   # ── Parallel builds ─────────────────────────────────────────────────────────
+  # `environment: production` so the jobs can read ACR_NAME / ACR_USERNAME /
+  # ACR_PASSWORD whether they're set at repo or environment level.
   build-orchestrator:
     needs: setup
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
-          registry: ${{ env.ACR_URL }}
+          registry: ${{ vars.ACR_NAME }}.azurecr.io
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
       - uses: docker/build-push-action@v5
@@ -73,21 +73,22 @@ jobs:
           file: Dockerfile.orchestrator     # multi-stage: builds the SPA too
           push: ${{ needs.setup.outputs.push_image }}
           tags: |
-            ${{ env.ACR_URL }}/orbo-orchestrator:${{ env.ENV_LABEL }}-${{ github.sha }}
-            ${{ env.ACR_URL }}/orbo-orchestrator:${{ env.ENV_LABEL }}-latest
-          cache-from: type=registry,ref=${{ env.ACR_URL }}/orbo-orchestrator:buildcache
-          cache-to:   type=registry,ref=${{ env.ACR_URL }}/orbo-orchestrator:buildcache,mode=max
+            ${{ vars.ACR_NAME }}.azurecr.io/orbo-orchestrator:${{ env.ENV_LABEL }}-${{ github.sha }}
+            ${{ vars.ACR_NAME }}.azurecr.io/orbo-orchestrator:${{ env.ENV_LABEL }}-latest
+          cache-from: type=registry,ref=${{ vars.ACR_NAME }}.azurecr.io/orbo-orchestrator:buildcache
+          cache-to:   type=registry,ref=${{ vars.ACR_NAME }}.azurecr.io/orbo-orchestrator:buildcache,mode=max
 
   build-agent:
     needs: setup
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
-          registry: ${{ env.ACR_URL }}
+          registry: ${{ vars.ACR_NAME }}.azurecr.io
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
       - uses: docker/build-push-action@v5
@@ -96,21 +97,22 @@ jobs:
           file: Dockerfile.agent
           push: ${{ needs.setup.outputs.push_image }}
           tags: |
-            ${{ env.ACR_URL }}/orbo-agent:${{ env.ENV_LABEL }}-${{ github.sha }}
-            ${{ env.ACR_URL }}/orbo-agent:${{ env.ENV_LABEL }}-latest
-          cache-from: type=registry,ref=${{ env.ACR_URL }}/orbo-agent:buildcache
-          cache-to:   type=registry,ref=${{ env.ACR_URL }}/orbo-agent:buildcache,mode=max
+            ${{ vars.ACR_NAME }}.azurecr.io/orbo-agent:${{ env.ENV_LABEL }}-${{ github.sha }}
+            ${{ vars.ACR_NAME }}.azurecr.io/orbo-agent:${{ env.ENV_LABEL }}-latest
+          cache-from: type=registry,ref=${{ vars.ACR_NAME }}.azurecr.io/orbo-agent:buildcache
+          cache-to:   type=registry,ref=${{ vars.ACR_NAME }}.azurecr.io/orbo-agent:buildcache,mode=max
 
   build-mcp:
     needs: setup
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
-          registry: ${{ env.ACR_URL }}
+          registry: ${{ vars.ACR_NAME }}.azurecr.io
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
       - uses: docker/build-push-action@v5
@@ -119,10 +121,10 @@ jobs:
           file: Dockerfile.mcp
           push: ${{ needs.setup.outputs.push_image }}
           tags: |
-            ${{ env.ACR_URL }}/orbo-mcp:${{ env.ENV_LABEL }}-${{ github.sha }}
-            ${{ env.ACR_URL }}/orbo-mcp:${{ env.ENV_LABEL }}-latest
-          cache-from: type=registry,ref=${{ env.ACR_URL }}/orbo-mcp:buildcache
-          cache-to:   type=registry,ref=${{ env.ACR_URL }}/orbo-mcp:buildcache,mode=max
+            ${{ vars.ACR_NAME }}.azurecr.io/orbo-mcp:${{ env.ENV_LABEL }}-${{ github.sha }}
+            ${{ vars.ACR_NAME }}.azurecr.io/orbo-mcp:${{ env.ENV_LABEL }}-latest
+          cache-from: type=registry,ref=${{ vars.ACR_NAME }}.azurecr.io/orbo-mcp:buildcache
+          cache-to:   type=registry,ref=${{ vars.ACR_NAME }}.azurecr.io/orbo-mcp:buildcache,mode=max
 
   # ── Deploy (skipped on PRs) ───────────────────────────────────────────────────
   deploy:
@@ -143,13 +145,13 @@ jobs:
           [[ -z "${{ secrets.RECALL_API_KEY }}"        ]] && missing+=("secret:RECALL_API_KEY")
           [[ -z "${{ secrets.RECALL_WEBHOOK_SECRET }}" ]] && missing+=("secret:RECALL_WEBHOOK_SECRET")
           [[ -z "${{ secrets.AZURE_OPENAI_API_KEY }}"  ]] && missing+=("secret:AZURE_OPENAI_API_KEY")
+          [[ -z "${{ vars.ACR_NAME }}"                 ]] && missing+=("var:ACR_NAME")
           [[ -z "${{ vars.RESOURCE_GROUP }}"           ]] && missing+=("var:RESOURCE_GROUP")
           [[ -z "${{ vars.ORCHESTRATOR_APP }}"         ]] && missing+=("var:ORCHESTRATOR_APP")
           [[ -z "${{ vars.AGENT_APP }}"                ]] && missing+=("var:AGENT_APP")
           [[ -z "${{ vars.MCP_APP }}"                  ]] && missing+=("var:MCP_APP")
-          [[ -z "${{ vars.ACR_NAME }}"                 ]] && missing+=("var:ACR_NAME")
           if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "❌ Missing in the 'production' GitHub Environment: ${missing[*]}"; exit 1
+            echo "❌ Missing in the 'production' GitHub Environment (or repo): ${missing[*]}"; exit 1
           fi
           echo "✅ Required secrets/variables present"
 
@@ -162,9 +164,10 @@ jobs:
         id: ctx
         run: |
           SHA="${{ github.sha }}"; L="${{ env.ENV_LABEL }}"; RG="${{ vars.RESOURCE_GROUP }}"
-          echo "orchestrator_img=${{ env.ACR_URL }}/orbo-orchestrator:${L}-${SHA}" >> $GITHUB_OUTPUT
-          echo "agent_img=${{ env.ACR_URL }}/orbo-agent:${L}-${SHA}"               >> $GITHUB_OUTPUT
-          echo "mcp_img=${{ env.ACR_URL }}/orbo-mcp:${L}-${SHA}"                    >> $GITHUB_OUTPUT
+          ACR_URL="${{ vars.ACR_NAME }}.azurecr.io"
+          echo "orchestrator_img=$ACR_URL/orbo-orchestrator:${L}-${SHA}" >> $GITHUB_OUTPUT
+          echo "agent_img=$ACR_URL/orbo-agent:${L}-${SHA}"               >> $GITHUB_OUTPUT
+          echo "mcp_img=$ACR_URL/orbo-mcp:${L}-${SHA}"                    >> $GITHUB_OUTPUT
           fqdn() { az containerapp show -n "$1" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv; }
           echo "orchestrator_fqdn=$(fqdn ${{ vars.ORCHESTRATOR_APP }})" >> $GITHUB_OUTPUT
           echo "agent_fqdn=$(fqdn ${{ vars.AGENT_APP }})" >> $GITHUB_OUTPUT
