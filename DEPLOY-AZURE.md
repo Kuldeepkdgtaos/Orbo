@@ -151,18 +151,23 @@ images (the orchestrator image also builds the SPA) and push them to ACR.
 
 ### Option A — build locally with Docker, push to ACR (works regardless of ACR Tasks)
 On a machine with a running Docker daemon (your laptop with Docker Desktop) — **not Azure Cloud
-Shell, which has no Docker daemon** — from the repo root:
+Shell, which has no Docker daemon** — from the repo root.
+
+Log in to ACR. If the Azure CLI is installed locally: `az acr login -n <acr>`. If it isn't,
+log in with the ACR **admin** credentials (no `az` needed — enable Admin user in the Portal under
+the registry's Access keys, or run `az acr credential show -n <acr>` in Cloud Shell to read them):
 ```bash
-az acr login -n $ACR
-docker build -t $ACR.azurecr.io/orbo-orchestrator:prod-latest -f Dockerfile.orchestrator .
-docker build -t $ACR.azurecr.io/orbo-agent:prod-latest        -f Dockerfile.agent .
-docker build -t $ACR.azurecr.io/orbo-mcp:prod-latest          -f Dockerfile.mcp .
-docker push $ACR.azurecr.io/orbo-orchestrator:prod-latest
-docker push $ACR.azurecr.io/orbo-agent:prod-latest
-docker push $ACR.azurecr.io/orbo-mcp:prod-latest
+docker login <acr>.azurecr.io          # username + password = ACR admin credentials
+docker build -t <acr>.azurecr.io/orbo-orchestrator:prod-latest -f Dockerfile.orchestrator .
+docker build -t <acr>.azurecr.io/orbo-agent:prod-latest        -f Dockerfile.agent .
+docker build -t <acr>.azurecr.io/orbo-mcp:prod-latest          -f Dockerfile.mcp .
+docker push <acr>.azurecr.io/orbo-orchestrator:prod-latest
+docker push <acr>.azurecr.io/orbo-agent:prod-latest
+docker push <acr>.azurecr.io/orbo-mcp:prod-latest
 ```
 Container Apps run linux/amd64; on an amd64 host no `--platform` flag is needed (on Apple Silicon
-add `--platform linux/amd64`). Verify: `az acr repository list -n $ACR -o table`.
+add `--platform linux/amd64`). Verify: `az acr repository list -n <acr> -o table` (or the Portal →
+registry → Repositories).
 
 ### Option B — let the GitHub Actions pipeline build them (no local Docker, no ACR Tasks)
 The pipeline builds on GitHub runners and pushes to ACR (unaffected by ACR Tasks). Do §8's GitHub
