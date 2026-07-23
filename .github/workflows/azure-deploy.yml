@@ -29,10 +29,10 @@ name: Build and Deploy to Azure Container Apps
 on:
   push:
     branches: [main]
-    paths-ignore: ['docs/**', '**/*.md', '.gitignore']
+    paths-ignore: ['docs/**', '**/*.md', '.gitignore', '**/*.sql']
   pull_request:
     branches: [main]
-    paths-ignore: ['docs/**', '**/*.md', '.gitignore']
+    paths-ignore: ['docs/**', '**/*.md', '.gitignore', '**/*.sql']
   workflow_dispatch:
 
 env:
