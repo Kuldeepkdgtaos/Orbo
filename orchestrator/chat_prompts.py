@@ -1,5 +1,5 @@
 GREETING = (
-    "Hi team, I'm the AI Standup Manager. "
+    "Hi team, I'm Orbo. "
     "I'll go around and ask each of you for a quick update — yesterday, today, and any blockers. "
     "Type 'done' or just stop talking when you're finished."
 )
