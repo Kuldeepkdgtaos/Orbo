@@ -81,6 +81,10 @@ async def list_standups(domain: Optional[str] = None, db: AsyncSession = Depends
             ended_at=s.ended_at,
             created_at=s.created_at,
             participant_count=count,
+            # Without these the SPA can't distinguish a recurring session from a
+            # standalone standup, so sessions wrongly appear under "One-off".
+            template_id=s.template_id,
+            session_number=s.session_number,
         )
         items.append(item)
     return items

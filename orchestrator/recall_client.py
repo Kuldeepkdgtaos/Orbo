@@ -17,7 +17,7 @@ class RecallClient:
             "Content-Type": "application/json",
         }
 
-    async def create_bot(self, meeting_url: str, webhook_url: str, bot_name: str = "AI Standup Manager") -> dict[str, Any]:
+    async def create_bot(self, meeting_url: str, webhook_url: str, bot_name: str = "Orbo") -> dict[str, Any]:
         payload = {
             "meeting_url": meeting_url,
             "bot_name": bot_name,
